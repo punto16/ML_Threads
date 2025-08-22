@@ -4,6 +4,11 @@
 #include <cmath>
 #include <chrono>
 
+#include "ML_Threads.h"
+
+
+std::mutex coutMutex;
+
 void clearLine() {
     std::cout << "\r\033[K";
 }
@@ -23,33 +28,23 @@ bool isPrime(long long n) {
     return true;
 }
 
-void CalculatePrimes(const long long target)
+void CalculatePrimes(const long long start, const long long end)
 {
-    auto startTime = std::chrono::high_resolution_clock::now();
-    Log("Starting intensive calculation...");
+    {
+        std::lock_guard<std::mutex> lock(coutMutex);
+        std::cout << "Starting intensive calculation from " << start << " to " << end << "..." << std::endl;
+    }
 
     std::vector<long long> primes;
     primes.reserve(700000);
 
-    auto individualStart = std::chrono::high_resolution_clock::now();
-    bool isTargetPrime = isPrime(target);
-    auto individualEnd = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> individualTime = individualEnd - individualStart;
-
-    Log("Time to check if " + std::to_string(target) + " is prime: " +
-        std::to_string(individualTime.count()) + " seconds");
-    Log("Is " + std::to_string(target) + " prime? " + (isTargetPrime ? "Yes" : "No"));
-
     int dotCounter = 0;
-    for (long long i = 2; i <= target; ++i) {
+    for (long long i = start; i <= end; ++i) {
         if (isPrime(i)) {
             primes.push_back(i);
         }
 
         if (i % 100000 == 0) {
-            auto currentTime = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double> elapsed = currentTime - startTime;
-
             std::string dots;
             dotCounter = (dotCounter % 3) + 1;
             for (int j = 0; j < dotCounter; j++) {
@@ -61,39 +56,73 @@ void CalculatePrimes(const long long target)
                 padding += " ";
             }
 
+            std::lock_guard<std::mutex> lock(coutMutex);
             clearLine();
             std::cout << "Processing" + dots + padding + " " + std::to_string(i) + "/" +
-                std::to_string(target) + " (" +
-                std::to_string(static_cast<double>(i) / target * 100) +
-                "%), Elapsed: " + std::to_string(elapsed.count()) + "s" << std::flush;
+                std::to_string(end) + " (" +
+                std::to_string(static_cast<double>(i - start) / (end - start) * 100) +
+                "%)" << std::flush;
         }
     }
 
+    std::lock_guard<std::mutex> lock(coutMutex);
     std::cout << std::endl;
 
-    auto endTime = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> totalTime = endTime - startTime;
-
-    Log("Calculation completed!");
-    Log("Total time: " + std::to_string(totalTime.count()) + " seconds");
     Log("Found " + std::to_string(primes.size()) + " prime numbers");
 
-    Log("First 5 primes:");
-    for (int i = 0; i < 5 && i < primes.size(); ++i) {
-        Log(std::to_string(primes[i]));
-    }
+    if (!primes.empty()) {
+        Log("First 5 primes in range:");
+        for (int i = 0; i < 5 && i < primes.size(); ++i) {
+            Log(std::to_string(primes[i]));
+        }
 
-    Log("Last 5 primes:");
-    for (int i = std::max(0, (int)primes.size() - 5); i < primes.size(); ++i) {
-        Log(std::to_string(primes[i]));
+        Log("Last 5 primes in range:");
+        for (int i = std::max(0, (int)primes.size() - 5); i < primes.size(); ++i) {
+            Log(std::to_string(primes[i]));
+        }
     }
-
-    double primesPerSecond = primes.size() / totalTime.count();
-    Log("Performance: " + std::to_string(primesPerSecond) + " primes/second");
 }
 
 int main()
 {
-    CalculatePrimes(10000000);  // 10 million (10^7)
+    ML_CPU_Threads thread(10);
+    long long primes_range = 10000000;
+
+    Log("Primes Calculation WITHOUT using multithreading");
+    auto startTime = std::chrono::high_resolution_clock::now();
+
+    CalculatePrimes(0, primes_range);  // 10 million (10^7)
+
+    auto endTime = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> totalTime = endTime - startTime;
+    Log("Calculation completed!");
+    Log("Total time: " + std::to_string(totalTime.count()) + " seconds");
+
+    Log("\n\n\n\n\n\n\n");
+    Log("Primes Calculation using multithreading");
+
+    startTime = std::chrono::high_resolution_clock::now();
+
+    int numThreads = thread.GetTotalThreads();
+    long long segmentSize = primes_range / numThreads;
+
+    for (int i = 0; i < numThreads; i++) {
+        long long start = i * segmentSize;
+        long long end = (i == numThreads - 1) ? primes_range : (i + 1) * segmentSize - 1;
+
+        thread.Start([start, end]() {
+            CalculatePrimes(start, end);
+            });
+    }
+
+    while (thread.IsWorking()) {
+        std::this_thread::yield();
+    }
+
+    endTime = std::chrono::high_resolution_clock::now();
+    totalTime = endTime - startTime;
+    Log("Calculation completed!");
+    Log("Total time: " + std::to_string(totalTime.count()) + " seconds");
+
     return 0;
 }
